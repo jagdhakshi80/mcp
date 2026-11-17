@@ -112,3 +112,207 @@ if __name__ == "__main__":
         mcp.run()
     except KeyboardInterrupt:
         pass
+
+# ---------- Forecast Helper ----------
+
+async def get_location_data(latitude: float, longitude: float):
+    """Retrieve NWS grid and forecast URLs for a location."""
+
+    if not (-90 <= latitude <= 90):
+        raise ValueError("Latitude must be between -90 and 90.")
+
+    if not (-180 <= longitude <= 180):
+        raise ValueError("Longitude must be between -180 and 180.")
+
+    url = f"{NWS_API_BASE}/points/{latitude},{longitude}"
+
+    data = await make_nws_request(url)
+
+    if not data:
+        return None
+
+    return data.get("properties", {})
+
+
+# ---------- Tool 3: Weather Forecast ----------
+
+@mcp.tool()
+async def get_forecast(latitude: float, longitude: float) -> str:
+    """
+    Get the weather forecast for a location using latitude and longitude.
+    Example: latitude=37.3382, longitude=-121.8863
+    """
+
+    location = await get_location_data(latitude, longitude)
+
+    if not location:
+        return "Unable to retrieve location forecast information."
+
+    forecast_url = location.get("forecast")
+
+    if not forecast_url:
+        return "Forecast URL unavailable for this location."
+
+    data = await make_nws_request(forecast_url)
+
+    if not data:
+        return "Unable to retrieve forecast."
+
+    periods = data.get("properties", {}).get("periods", [])
+
+    if not periods:
+        return "No forecast periods available."
+
+    results = []
+
+    for period in periods[:5]:
+        results.append(
+            f"{period.get('name')}: "
+            f"{period.get('temperature')}°"
+            f"{period.get('temperatureUnit')}, "
+            f"{period.get('shortForecast')}, "
+            f"Wind: {period.get('windSpeed')} "
+            f"{period.get('windDirection')}"
+        )
+
+    return "\n".join(results)
+
+
+# ---------- Tool 4: Hourly Forecast ----------
+
+@mcp.tool()
+async def get_hourly_forecast(
+    latitude: float,
+    longitude: float,
+    limit: int = 12
+) -> str:
+    """
+    Get hourly weather forecast for a location.
+    Limit is between 1 and 24.
+    """
+
+    location = await get_location_data(latitude, longitude)
+
+    if not location:
+        return "Unable to retrieve location information."
+
+    hourly_url = location.get("forecastHourly")
+
+    if not hourly_url:
+        return "Hourly forecast unavailable."
+
+    data = await make_nws_request(hourly_url)
+
+    if not data:
+        return "Unable to retrieve hourly forecast."
+
+    periods = data.get("properties", {}).get("periods", [])
+
+    limit = max(1, min(limit, 24))
+
+    results = []
+
+    for period in periods[:limit]:
+        results.append(
+            f"{period.get('startTime')}: "
+            f"{period.get('temperature')}°"
+            f"{period.get('temperatureUnit')}, "
+            f"{period.get('shortForecast')}, "
+            f"Wind: {period.get('windSpeed')}"
+        )
+
+    return "\n".join(results) or "No hourly forecast available."
+
+
+# ---------- Tool 5: Current Conditions ----------
+
+@mcp.tool()
+async def get_current_conditions(
+    latitude: float,
+    longitude: float
+) -> str:
+    """
+    Get the latest available weather observation for a location.
+    """
+
+    location = await get_location_data(latitude, longitude)
+
+    if not location:
+        return "Unable to retrieve location information."
+
+    stations_url = location.get("observationStations")
+
+    if not stations_url:
+        return "Observation stations unavailable."
+
+    stations_data = await make_nws_request(stations_url)
+
+    if not stations_data:
+        return "Unable to retrieve observation stations."
+
+    stations = stations_data.get("features", [])
+
+    if not stations:
+        return "No observation stations found."
+
+    station_id = stations[0].get("properties", {}).get("stationIdentifier")
+
+    if not station_id:
+        return "Station identifier unavailable."
+
+    observation_url = (
+        f"{NWS_API_BASE}/stations/{station_id}/observations/latest"
+    )
+
+    data = await make_nws_request(observation_url)
+
+    if not data:
+        return "Unable to retrieve current conditions."
+
+    p = data.get("properties", {})
+
+    temperature = p.get("temperature", {}).get("value")
+    humidity = p.get("relativeHumidity", {}).get("value")
+    wind = p.get("windSpeed", {}).get("value")
+    description = p.get("textDescription", "Unknown")
+
+    return (
+        f"Station: {station_id}\n"
+        f"Conditions: {description}\n"
+        f"Temperature: {temperature} °C\n"
+        f"Humidity: {humidity}%\n"
+        f"Wind Speed: {wind} m/s"
+    )
+
+
+# ---------- Tool 6: Detailed Alert ----------
+
+@mcp.tool()
+async def get_active_alert_details(state: str) -> str:
+    """
+    Get detailed information about active weather alerts for a US state.
+    """
+
+    state = state.upper().strip()
+
+    if len(state) != 2 or not state.isalpha():
+        return "Please provide a valid two-letter state code."
+
+    data = await make_nws_request(
+        f"{NWS_API_BASE}/alerts/active/area/{state}"
+    )
+
+    if not data:
+        return "Unable to retrieve alert details."
+
+    features = data.get("features", [])
+
+    if not features:
+        return "No active alerts found."
+
+    results = []
+
+    for feature in features[:5]:
+        results.append(format_alert(feature))
+
+    return "\n\n---\n\n".join(results)[:MAX_CHARS]
